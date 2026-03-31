@@ -98,6 +98,18 @@ docker logs -f hooker
 docker stop hooker
 ```
 
+## About Protected Containers
+
+The hooker bot itself is protected by default — when you send `/stop all` or `/restart all`, the bot will **not** be stopped. This is implemented via the Docker label `hooker.protect=true`.
+
+You can protect other critical containers the same way:
+```bash
+docker run -l hooker.protect=true --name my-db ...
+docker update -l hooker.protect=true my-db
+```
+
+When you run `/stop all`, protected containers show as `protected (skipped)`.
+
 ## Security Notes
 
 - **Keep your token secret** — anyone with it can control your bot

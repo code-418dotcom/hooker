@@ -14,4 +14,6 @@ FROM scratch
 COPY --from=builder /hooker /hooker
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
+LABEL hooker.protect="true"
+
 ENTRYPOINT ["/hooker"]

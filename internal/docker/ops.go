@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/client"
@@ -18,6 +19,12 @@ type Ops struct {
 // NewOps creates a new Ops instance.
 func NewOps(c *client.Client) *Ops {
 	return &Ops{cli: c}
+}
+
+// isProtected checks if a container has the hooker.protect=true label.
+// Protected containers are skipped by bulk operations like StopAll and RestartAll.
+func isProtected(c types.Container) bool {
+	return c.Labels["hooker.protect"] == "true"
 }
 
 // List returns a formatted string of all containers and their state.
@@ -99,7 +106,7 @@ func (o *Ops) StartAll(ctx context.Context) (string, error) {
 	return "Started containers:\n" + strings.Join(results, "\n"), nil
 }
 
-// StopAll stops all running containers.
+// StopAll stops all running containers except those with hooker.protect=true label.
 func (o *Ops) StopAll(ctx context.Context) (string, error) {
 	containers, err := o.cli.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
@@ -109,6 +116,14 @@ func (o *Ops) StopAll(ctx context.Context) (string, error) {
 	var results []string
 	for _, c := range containers {
 		if c.State != "running" {
+			continue
+		}
+		if isProtected(c) {
+			name := c.Names[0]
+			if strings.HasPrefix(name, "/") {
+				name = name[1:]
+			}
+			results = append(results, fmt.Sprintf("`%s`: protected (skipped)", name))
 			continue
 		}
 		name := c.Names[0]
@@ -129,7 +144,7 @@ func (o *Ops) StopAll(ctx context.Context) (string, error) {
 	return "Stopped containers:\n" + strings.Join(results, "\n"), nil
 }
 
-// RestartAll restarts all containers.
+// RestartAll restarts all containers except those with hooker.protect=true label.
 func (o *Ops) RestartAll(ctx context.Context) (string, error) {
 	containers, err := o.cli.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
@@ -138,6 +153,14 @@ func (o *Ops) RestartAll(ctx context.Context) (string, error) {
 
 	var results []string
 	for _, c := range containers {
+		if isProtected(c) {
+			name := c.Names[0]
+			if strings.HasPrefix(name, "/") {
+				name = name[1:]
+			}
+			results = append(results, fmt.Sprintf("`%s`: protected (skipped)", name))
+			continue
+		}
 		name := c.Names[0]
 		if strings.HasPrefix(name, "/") {
 			name = name[1:]

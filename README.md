@@ -66,6 +66,20 @@ docker run -l hooker.group=media --name plex ...
 docker update -l hooker.group=media <container>
 ```
 
+### Protected containers
+
+Containers with the label `hooker.protect=true` are **skipped** by `/stop all` and `/restart all` commands. This is useful to prevent stopping critical services (including the hooker bot itself, which has this label baked in).
+
+To protect another container:
+```bash
+docker run -l hooker.protect=true --name critical-service ...
+
+# Or label an existing container
+docker update -l hooker.protect=true <container>
+```
+
+When you run `/stop all`, protected containers will be listed as `protected (skipped)` in the response.
+
 ## Development
 
 ### Run tests
