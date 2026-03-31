@@ -24,7 +24,8 @@ Telegram bot to start, stop, and restart Docker containers individually, in bulk
 
 1. Clone the repo and copy the environment template:
 ```bash
-cd /home/sjanus/projects/hooker
+git clone https://github.com/code-418dotcom/hooker.git
+cd hooker
 cp .env.example .env
 ```
 

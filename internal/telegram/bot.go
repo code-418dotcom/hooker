@@ -7,7 +7,7 @@ import (
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 
-	"github.com/sjanus/hooker/internal/config"
+	"github.com/code-418dotcom/hooker/internal/config"
 )
 
 // DockerOps defines the interface for Docker operations.

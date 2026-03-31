@@ -8,7 +8,7 @@ cp .env.example .env
 
 Edit `.env` and add your credentials:
 ```
-TELEGRAM_BOT_TOKEN=8035118924:AAF8htPim7MYIEpjvgw7zguwDYjAF_uSX6Q
+TELEGRAM_BOT_TOKEN=<your-bot-token-from-botfather>
 TELEGRAM_ADMIN_ID=<your-user-id>
 ```
 

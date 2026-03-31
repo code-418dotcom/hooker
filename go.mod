@@ -1,4 +1,4 @@
-module github.com/sjanus/hooker
+module github.com/code-418dotcom/hooker
 
 go 1.25.0
 

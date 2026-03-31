@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/sjanus/hooker/internal/config"
+	"github.com/code-418dotcom/hooker/internal/config"
 )
 
 // FakeOps is a mock implementation of DockerOps for testing.
