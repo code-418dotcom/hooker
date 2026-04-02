@@ -63,6 +63,10 @@ func (f *FakeOps) StopGroup(ctx context.Context, tag string) (string, error) {
 	return "Stopped group " + tag, nil
 }
 
+func (f *FakeOps) ListGroups(ctx context.Context) ([]string, error) {
+	return []string{"web", "db"}, nil
+}
+
 // TestNewBot verifies that NewBot creates a valid Bot instance.
 func TestNewBot(t *testing.T) {
 	cfg := &config.Config{

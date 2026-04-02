@@ -179,6 +179,24 @@ func (o *Ops) RestartAll(ctx context.Context) (string, error) {
 	return "Restarted containers:\n" + strings.Join(results, "\n"), nil
 }
 
+// ListGroups returns all distinct hooker.group label values across containers.
+func (o *Ops) ListGroups(ctx context.Context) ([]string, error) {
+	containers, err := o.cli.ContainerList(ctx, container.ListOptions{All: true})
+	if err != nil {
+		return nil, fmt.Errorf("docker: %w", err)
+	}
+
+	seen := make(map[string]bool)
+	var groups []string
+	for _, c := range containers {
+		if g, ok := c.Labels["hooker.group"]; ok && g != "" && !seen[g] {
+			seen[g] = true
+			groups = append(groups, g)
+		}
+	}
+	return groups, nil
+}
+
 // StartGroup starts all containers with the given group label.
 func (o *Ops) StartGroup(ctx context.Context, tag string) (string, error) {
 	filter := filters.NewArgs(filters.Arg("label", "hooker.group="+tag))
