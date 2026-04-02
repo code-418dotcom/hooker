@@ -30,6 +30,9 @@ type DockerOps interface {
 // bulkCooldown is the minimum interval between bulk/destructive operations.
 const bulkCooldown = 5 * time.Second
 
+// groupCacheTTL is how long the cached group list is considered fresh.
+const groupCacheTTL = 30 * time.Second
+
 // Bot is the Telegram bot that polls for messages and dispatches commands.
 type Bot struct {
 	api     *tgbotapi.BotAPI
@@ -38,8 +41,10 @@ type Bot struct {
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
 
-	mu       sync.Mutex
-	lastBulk time.Time
+	mu         sync.Mutex
+	lastBulk   time.Time
+	groupCache []string
+	groupCachedAt time.Time
 }
 
 // NewBot creates a new Bot instance.
@@ -268,6 +273,25 @@ func (b *Bot) dispatch(ctx context.Context, cmd Command) string {
 	return reply
 }
 
+// cachedGroups returns the group list, refreshing from Docker if the cache is stale.
+func (b *Bot) cachedGroups(ctx context.Context) []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if time.Since(b.groupCachedAt) < groupCacheTTL {
+		return b.groupCache
+	}
+
+	groups, err := b.ops.ListGroups(ctx)
+	if err != nil {
+		slog.Error("failed to list groups for keyboard", "error", err)
+		return b.groupCache // stale is better than empty
+	}
+	b.groupCache = groups
+	b.groupCachedAt = time.Now()
+	return groups
+}
+
 // buildKeyboard builds an inline keyboard with common commands and group shortcuts.
 func (b *Bot) buildKeyboard(ctx context.Context) *tgbotapi.InlineKeyboardMarkup {
 	rows := [][]tgbotapi.InlineKeyboardButton{
@@ -278,11 +302,7 @@ func (b *Bot) buildKeyboard(ctx context.Context) *tgbotapi.InlineKeyboardMarkup 
 		},
 	}
 
-	groups, err := b.ops.ListGroups(ctx)
-	if err != nil {
-		slog.Error("failed to list groups for keyboard", "error", err)
-	}
-	for _, g := range groups {
+	for _, g := range b.cachedGroups(ctx) {
 		rows = append(rows, []tgbotapi.InlineKeyboardButton{
 			tgbotapi.NewInlineKeyboardButtonData("▶️ "+g, "/start group "+g),
 			tgbotapi.NewInlineKeyboardButtonData("⏹ "+g, "/stop group "+g),

@@ -9,6 +9,7 @@ CLAUDE.local.md
 .claude/logs/
 .claude/agent-memory/
 .claude/backups/
+.claude/skills/
 
 # Common
 .DS_Store

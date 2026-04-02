@@ -10,22 +10,20 @@ import (
 	"github.com/docker/docker/api/types/container"
 )
 
-// mockClient implements just enough of the Docker client interface for testing.
-// We test via Ops methods which call the real client methods, so we use a
-// wrapper that satisfies the calls Ops makes.
-
 type mockAction struct {
 	id     string
 	action string
 }
 
 type mockDockerClient struct {
-	containers []types.Container
-	err        error
-	actions    []mockAction
-	startErr   error
-	stopErr    error
-	restartErr error
+	containers  []types.Container
+	err         error
+	actions     []mockAction
+	startErr    error
+	stopErr     error
+	restartErr  error
+	inspectData map[string]types.ContainerJSON
+	inspectErr  error
 }
 
 func (m *mockDockerClient) ContainerList(_ context.Context, _ container.ListOptions) ([]types.Container, error) {
@@ -47,8 +45,20 @@ func (m *mockDockerClient) ContainerRestart(_ context.Context, id string, _ cont
 	return m.restartErr
 }
 
-// Since Ops uses *client.Client directly, we can't easily mock it without an interface.
-// Instead, test the helper functions and use integration-style tests for the rest.
+func (m *mockDockerClient) ContainerInspect(_ context.Context, id string) (types.ContainerJSON, error) {
+	if m.inspectErr != nil {
+		return types.ContainerJSON{}, m.inspectErr
+	}
+	if data, ok := m.inspectData[id]; ok {
+		return data, nil
+	}
+	return types.ContainerJSON{Config: &container.Config{Labels: map[string]string{}}}, nil
+}
+
+// newTestOps creates an Ops with a mock client for testing.
+func newTestOps(mock *mockDockerClient) *Ops {
+	return &Ops{cli: mock}
+}
 
 func TestContainerName(t *testing.T) {
 	tests := []struct {
@@ -65,6 +75,14 @@ func TestContainerName(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("containerName(%v) = %q, want %q", tc.names, got, tc.want)
 		}
+	}
+}
+
+func TestContainerNameEmpty(t *testing.T) {
+	c := types.Container{ID: "abc123"}
+	got := containerName(c)
+	if got != "abc123" {
+		t.Errorf("containerName with no names = %q, want %q", got, "abc123")
 	}
 }
 
@@ -87,90 +105,190 @@ func TestIsProtected(t *testing.T) {
 	}
 }
 
-func TestForEachContainer(t *testing.T) {
+func TestList(t *testing.T) {
+	mock := &mockDockerClient{
+		containers: []types.Container{
+			{Names: []string{"/nginx"}, State: "running"},
+			{Names: []string{"/postgres"}, State: "exited"},
+		},
+	}
+	ops := newTestOps(mock)
+	result, err := ops.List(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "nginx") || !strings.Contains(result, "postgres") {
+		t.Errorf("expected both containers in output, got: %s", result)
+	}
+}
+
+func TestListEmpty(t *testing.T) {
+	mock := &mockDockerClient{}
+	ops := newTestOps(mock)
+	result, err := ops.List(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result != "No containers found." {
+		t.Errorf("expected empty message, got: %s", result)
+	}
+}
+
+func TestListError(t *testing.T) {
+	mock := &mockDockerClient{err: errors.New("connection refused")}
+	ops := newTestOps(mock)
+	_, err := ops.List(context.Background())
+	if err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestStartSingle(t *testing.T) {
+	mock := &mockDockerClient{}
+	ops := newTestOps(mock)
+	result, err := ops.Start(context.Background(), "nginx")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "nginx") {
+		t.Errorf("expected nginx in result, got: %s", result)
+	}
+	if len(mock.actions) != 1 || mock.actions[0].action != "start" {
+		t.Errorf("expected 1 start action, got: %v", mock.actions)
+	}
+}
+
+func TestStopProtectedSingle(t *testing.T) {
+	mock := &mockDockerClient{
+		inspectData: map[string]types.ContainerJSON{
+			"protected-app": {Config: &container.Config{Labels: map[string]string{"hooker.protect": "true"}}},
+		},
+	}
+	ops := newTestOps(mock)
+	result, err := ops.Stop(context.Background(), "protected-app")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "protected") {
+		t.Errorf("expected protection message, got: %s", result)
+	}
+	if len(mock.actions) != 0 {
+		t.Errorf("expected no stop action on protected container, got: %v", mock.actions)
+	}
+}
+
+func TestStopUnprotectedSingle(t *testing.T) {
+	mock := &mockDockerClient{}
+	ops := newTestOps(mock)
+	result, err := ops.Stop(context.Background(), "nginx")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "Stopped") {
+		t.Errorf("expected stopped message, got: %s", result)
+	}
+	if len(mock.actions) != 1 || mock.actions[0].action != "stop" {
+		t.Errorf("expected 1 stop action, got: %v", mock.actions)
+	}
+}
+
+func TestRestartProtectedSingle(t *testing.T) {
+	mock := &mockDockerClient{
+		inspectData: map[string]types.ContainerJSON{
+			"critical-db": {Config: &container.Config{Labels: map[string]string{"hooker.protect": "true"}}},
+		},
+	}
+	ops := newTestOps(mock)
+	result, err := ops.Restart(context.Background(), "critical-db")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "protected") {
+		t.Errorf("expected protection message, got: %s", result)
+	}
+	if len(mock.actions) != 0 {
+		t.Errorf("expected no restart action on protected container, got: %v", mock.actions)
+	}
+}
+
+func TestStartAllSkipsRunningAndProtected(t *testing.T) {
 	mock := &mockDockerClient{
 		containers: []types.Container{
 			{ID: "1", Names: []string{"/running"}, State: "running", Labels: map[string]string{}},
 			{ID: "2", Names: []string{"/stopped"}, State: "exited", Labels: map[string]string{}},
-			{ID: "3", Names: []string{"/protected"}, State: "running", Labels: map[string]string{"hooker.protect": "true"}},
+			{ID: "3", Names: []string{"/protected-stopped"}, State: "exited", Labels: map[string]string{"hooker.protect": "true"}},
 		},
 	}
-
-	// Test that forEachContainer skips filtered containers and applies action to the rest.
-	// We can't call forEachContainer directly since it uses o.cli, but we can test
-	// the filter and action pattern through the public methods once we have an interface.
-
-	// For now, verify the mock data and helper functions work correctly.
-	for _, c := range mock.containers {
-		name := containerName(c)
-		if name == "" {
-			t.Error("expected non-empty container name")
-		}
+	ops := newTestOps(mock)
+	result, err := ops.StartAll(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-
-	if !isProtected(mock.containers[2]) {
-		t.Error("expected container 3 to be protected")
+	// Should only start container 2 (stopped, unprotected).
+	if len(mock.actions) != 1 || mock.actions[0].id != "2" {
+		t.Errorf("expected only container 2 started, got actions: %v", mock.actions)
 	}
-	if isProtected(mock.containers[0]) {
-		t.Error("expected container 1 to not be protected")
+	if !strings.Contains(result, "protected (skipped)") {
+		t.Errorf("expected protection skip message, got: %s", result)
 	}
 }
 
-func TestContainerNameEdgeCases(t *testing.T) {
-	c := types.Container{Names: []string{"/a/b/c"}}
-	got := containerName(c)
-	if got != "a/b/c" {
-		t.Errorf("containerName with nested path = %q, want %q", got, "a/b/c")
+func TestStopAllSkipsProtected(t *testing.T) {
+	mock := &mockDockerClient{
+		containers: []types.Container{
+			{ID: "1", Names: []string{"/app"}, State: "running", Labels: map[string]string{}},
+			{ID: "2", Names: []string{"/critical"}, State: "running", Labels: map[string]string{"hooker.protect": "true"}},
+		},
+	}
+	ops := newTestOps(mock)
+	result, err := ops.StopAll(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(mock.actions) != 1 || mock.actions[0].id != "1" {
+		t.Errorf("expected only container 1 stopped, got: %v", mock.actions)
+	}
+	if !strings.Contains(result, "protected (skipped)") {
+		t.Errorf("expected protection skip, got: %s", result)
 	}
 }
 
-// TestListFormatsOutput verifies the List output format using mock data.
-// This requires refactoring Ops to accept an interface; for now test helpers.
-func TestListGroupsExtraction(t *testing.T) {
-	containers := []types.Container{
-		{Labels: map[string]string{"hooker.group": "web"}},
-		{Labels: map[string]string{"hooker.group": "web"}},
-		{Labels: map[string]string{"hooker.group": "db"}},
-		{Labels: map[string]string{}},
+func TestBulkErrorSanitized(t *testing.T) {
+	mock := &mockDockerClient{
+		containers: []types.Container{
+			{ID: "1", Names: []string{"/app"}, State: "running", Labels: map[string]string{}},
+		},
+		stopErr: errors.New("cannot stop: /var/run/docker.sock permission denied"),
 	}
-
-	seen := make(map[string]bool)
-	var groups []string
-	for _, c := range containers {
-		if g, ok := c.Labels[labelGroup]; ok && g != "" && !seen[g] {
-			seen[g] = true
-			groups = append(groups, g)
-		}
+	ops := newTestOps(mock)
+	result, err := ops.StopAll(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
+	// Should say "failed", not include the raw error with socket path.
+	if strings.Contains(result, "/var/run/docker.sock") {
+		t.Errorf("raw error leaked to user: %s", result)
+	}
+	if !strings.Contains(result, "failed") {
+		t.Errorf("expected 'failed' in result, got: %s", result)
+	}
+}
 
+func TestListGroups(t *testing.T) {
+	mock := &mockDockerClient{
+		containers: []types.Container{
+			{Labels: map[string]string{"hooker.group": "web"}},
+			{Labels: map[string]string{"hooker.group": "web"}},
+			{Labels: map[string]string{"hooker.group": "db"}},
+			{Labels: map[string]string{}},
+		},
+	}
+	ops := newTestOps(mock)
+	groups, err := ops.ListGroups(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 	if len(groups) != 2 {
 		t.Fatalf("expected 2 groups, got %d", len(groups))
-	}
-	if groups[0] != "web" || groups[1] != "db" {
-		t.Errorf("expected [web, db], got %v", groups)
-	}
-}
-
-func TestBulkResultFormatting(t *testing.T) {
-	// Test that error formatting in bulk operations produces readable output.
-	results := []string{
-		"`nginx`: started",
-		"`postgres`: error (connection refused)",
-		"`redis`: started",
-	}
-	output := "Started containers:\n" + strings.Join(results, "\n")
-	if !strings.Contains(output, "nginx") {
-		t.Error("expected output to contain nginx")
-	}
-	if !strings.Contains(output, "error") {
-		t.Error("expected output to contain error")
-	}
-}
-
-func TestDockerErrorWrapping(t *testing.T) {
-	inner := errors.New("connection refused")
-	wrapped := errors.New("docker: " + inner.Error())
-	if !strings.Contains(wrapped.Error(), "docker:") {
-		t.Error("expected wrapped error to contain docker prefix")
 	}
 }

@@ -3,6 +3,7 @@ package docker
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -24,9 +25,19 @@ const (
 	stateRunning = "running"
 )
 
+// dockerAPI is the subset of the Docker client API used by Ops.
+// Extracted as an interface to allow testing with mocks.
+type dockerAPI interface {
+	ContainerList(ctx context.Context, options container.ListOptions) ([]types.Container, error)
+	ContainerStart(ctx context.Context, containerID string, options container.StartOptions) error
+	ContainerStop(ctx context.Context, containerID string, options container.StopOptions) error
+	ContainerRestart(ctx context.Context, containerID string, options container.StopOptions) error
+	ContainerInspect(ctx context.Context, containerID string) (types.ContainerJSON, error)
+}
+
 // Ops provides Docker container operations.
 type Ops struct {
-	cli *client.Client
+	cli dockerAPI
 }
 
 // NewOps creates a new Ops instance.
@@ -49,6 +60,18 @@ func containerName(c types.Container) string {
 // isProtected checks if a container has the hooker.protect=true label.
 func isProtected(c types.Container) bool {
 	return c.Labels[labelProtect] == "true"
+}
+
+// checkProtected inspects a container by name and returns an error message if it is protected.
+func (o *Ops) checkProtected(ctx context.Context, name string) (string, error) {
+	info, err := o.cli.ContainerInspect(ctx, name)
+	if err != nil {
+		return "", fmt.Errorf("docker: %w", err)
+	}
+	if info.Config != nil && info.Config.Labels[labelProtect] == "true" {
+		return fmt.Sprintf("`%s` is protected and cannot be modified.", name), nil
+	}
+	return "", nil
 }
 
 // List returns a formatted string of all containers and their state.
@@ -85,10 +108,16 @@ func (o *Ops) Start(ctx context.Context, name string) (string, error) {
 	return fmt.Sprintf("Started `%s`", name), nil
 }
 
-// Stop stops a container by name.
+// Stop stops a container by name. Refuses to stop protected containers.
 func (o *Ops) Stop(ctx context.Context, name string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, singleTimeout)
 	defer cancel()
+
+	if msg, err := o.checkProtected(ctx, name); err != nil {
+		return "", err
+	} else if msg != "" {
+		return msg, nil
+	}
 
 	if err := o.cli.ContainerStop(ctx, name, container.StopOptions{}); err != nil {
 		return "", fmt.Errorf("docker: %w", err)
@@ -96,10 +125,16 @@ func (o *Ops) Stop(ctx context.Context, name string) (string, error) {
 	return fmt.Sprintf("Stopped `%s`", name), nil
 }
 
-// Restart restarts a container by name.
+// Restart restarts a container by name. Refuses to restart protected containers.
 func (o *Ops) Restart(ctx context.Context, name string) (string, error) {
 	ctx, cancel := context.WithTimeout(ctx, singleTimeout)
 	defer cancel()
+
+	if msg, err := o.checkProtected(ctx, name); err != nil {
+		return "", err
+	} else if msg != "" {
+		return msg, nil
+	}
 
 	if err := o.cli.ContainerRestart(ctx, name, container.StopOptions{}); err != nil {
 		return "", fmt.Errorf("docker: %w", err)
@@ -134,7 +169,8 @@ func (o *Ops) forEachContainer(
 			continue
 		}
 		if err := action(ctx, c); err != nil {
-			results = append(results, fmt.Sprintf("`%s`: error (%v)", name, err))
+			slog.Error("bulk operation failed on container", "container", name, "verb", verb, "error", err)
+			results = append(results, fmt.Sprintf("`%s`: failed", name))
 		} else {
 			results = append(results, fmt.Sprintf("`%s`: %s", name, verb))
 		}
@@ -143,13 +179,16 @@ func (o *Ops) forEachContainer(
 	return strings.Join(results, "\n"), nil
 }
 
-// StartAll starts all stopped containers.
+// StartAll starts all stopped containers, skipping protected ones.
 func (o *Ops) StartAll(ctx context.Context) (string, error) {
 	result, err := o.forEachContainer(ctx,
 		container.ListOptions{All: true},
 		func(c types.Container) (bool, string) {
 			if c.State == stateRunning {
 				return true, ""
+			}
+			if isProtected(c) {
+				return true, "protected (skipped)"
 			}
 			return false, ""
 		},

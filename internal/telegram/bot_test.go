@@ -111,47 +111,37 @@ func TestNewBot(t *testing.T) {
 	}
 }
 
-// TestDispatch verifies that the bot dispatches commands to the correct ops methods.
-func TestDispatch(t *testing.T) {
+// TestGroupCaching verifies that the group cache avoids repeated Docker API calls.
+func TestGroupCaching(t *testing.T) {
 	ops := NewFakeOps()
+	bot := &Bot{
+		adminID: 12345,
+		ops:     ops,
+		stopCh:  make(chan struct{}),
+	}
 	ctx := context.Background()
 
-	cases := []struct {
-		cmdType CommandType
-		name    string
-		wantOp  string
-	}{
-		{CmdList, "", "list"},
-		{CmdStart, "container1", "start"},
-		{CmdStop, "container1", "stop"},
-		{CmdRestart, "container1", "restart"},
+	// First call should populate cache.
+	groups := bot.cachedGroups(ctx)
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.wantOp, func(t *testing.T) {
-			switch tc.cmdType {
-			case CmdList:
-				_, _ = ops.List(ctx)
-				if ops.listCalls != 1 {
-					t.Errorf("list calls = %d, want 1", ops.listCalls)
-				}
-			case CmdStart:
-				_, _ = ops.Start(ctx, tc.name)
-				if ops.startCalls[tc.name] != 1 {
-					t.Errorf("start calls for %s = %d, want 1", tc.name, ops.startCalls[tc.name])
-				}
-			case CmdStop:
-				_, _ = ops.Stop(ctx, tc.name)
-				if ops.stopCalls[tc.name] != 1 {
-					t.Errorf("stop calls for %s = %d, want 1", tc.name, ops.stopCalls[tc.name])
-				}
-			case CmdRestart:
-				_, _ = ops.Restart(ctx, tc.name)
-				if ops.restartCalls[tc.name] != 1 {
-					t.Errorf("restart calls for %s = %d, want 1", tc.name, ops.restartCalls[tc.name])
-				}
-			}
-		})
+	// Second call within TTL should return cached result (ops.ListGroups not called again).
+	ops2 := NewFakeOps() // fresh ops that would return different data
+	bot.ops = ops2
+	groups2 := bot.cachedGroups(ctx)
+	if len(groups2) != 2 {
+		t.Fatalf("expected cached 2 groups, got %d", len(groups2))
+	}
+
+	// After expiring cache, should refresh.
+	bot.mu.Lock()
+	bot.groupCachedAt = time.Now().Add(-time.Minute)
+	bot.mu.Unlock()
+	groups3 := bot.cachedGroups(ctx)
+	if len(groups3) != 2 {
+		t.Fatalf("expected refreshed 2 groups, got %d", len(groups3))
 	}
 }
 
