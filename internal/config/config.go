@@ -1,7 +1,7 @@
 package config
 
 import (
-	"log"
+	"fmt"
 	"os"
 	"strconv"
 )
@@ -13,14 +13,14 @@ type Config struct {
 }
 
 // MustLoad loads configuration from environment variables.
-// Exits with a fatal error if required variables are missing or invalid.
+// Panics if required variables are missing or invalid.
 func MustLoad() *Config {
 	token := mustGetenv("TELEGRAM_BOT_TOKEN")
 	adminStr := mustGetenv("TELEGRAM_ADMIN_ID")
 
 	adminID, err := strconv.ParseInt(adminStr, 10, 64)
 	if err != nil {
-		log.Fatalf("invalid TELEGRAM_ADMIN_ID: %q must be an integer: %v", adminStr, err)
+		panic(fmt.Sprintf("invalid TELEGRAM_ADMIN_ID: %q must be an integer: %v", adminStr, err))
 	}
 
 	return &Config{
@@ -30,11 +30,11 @@ func MustLoad() *Config {
 }
 
 // mustGetenv returns the value of the environment variable key.
-// Exits with a fatal error if the variable is not set.
+// Panics if the variable is not set.
 func mustGetenv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		log.Fatalf("required environment variable %q is not set", key)
+		panic(fmt.Sprintf("required environment variable %q is not set", key))
 	}
 	return v
 }

@@ -17,4 +17,4 @@ Thumbs.db
 
 # Build artifacts
 bin/
-hooker
+/hooker
